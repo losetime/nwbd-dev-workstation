@@ -129,7 +129,7 @@ onMounted(load);
     <section class="mx-auto max-w-[1180px]">
         <header class="flex flex-wrap items-end justify-between gap-4">
             <div>
-                <h2 class="font-display text-[26px] leading-tight tracking-tight text-ink">系统管理 · 人员</h2>
+                <h2 class="font-display text-[26px] leading-tight tracking-tight text-ink">人员管理</h2>
                 <p class="mt-1.5 text-[12.5px] text-ink-faint">
                     在职 {{ stats.total }} 人 · 岗位由钉钉职位映射，可人工校正
                 </p>

@@ -11,6 +11,7 @@ const TaskDetail = () => import("@/views/tasks/TaskDetail.vue");
 const RiskList = () => import("@/views/risks/RiskList.vue");
 const HelpList = () => import("@/views/help/HelpList.vue");
 const ChangeList = () => import("@/views/changes/ChangeList.vue");
+const AdminHome = () => import("@/views/admin/AdminHome.vue");
 const Users = () => import("@/views/admin/Users.vue");
 const TaskTypes = () => import("@/views/admin/TaskTypes.vue");
 const Account = () => import("@/views/account/Account.vue");
@@ -26,8 +27,16 @@ export const router = createRouter({
         { path: "/risks", name: "risks", component: RiskList, meta: { title: "风险管理", perm: "myrisk" } },
         { path: "/help", name: "help", component: HelpList, meta: { title: "我要帮助", perm: "help" } },
         { path: "/changes", name: "changes", component: ChangeList, meta: { title: "变更管理", perm: "mychange" } },
-        { path: "/admin/users", name: "users", component: Users, meta: { title: "系统管理", perm: "sysadmin" } },
-        { path: "/admin/task-types", name: "task-types", component: TaskTypes, meta: { title: "任务类型", perm: "sysadmin" } },
+        {
+            path: "/admin",
+            component: AdminHome,
+            redirect: "/admin/users",
+            meta: { title: "系统管理", perm: "sysadmin" },
+            children: [
+                { path: "users", name: "users", component: Users, meta: { title: "人员管理", perm: "sysadmin" } },
+                { path: "task-types", name: "task-types", component: TaskTypes, meta: { title: "智能体管理", perm: "sysadmin" } },
+            ],
+        },
         { path: "/account", name: "account", component: Account, meta: { title: "用户信息" } },
         { path: "/login", name: "login", component: Login, meta: { title: "登录", bare: true, public: true } },
         { path: "/:pathMatch(.*)*", redirect: "/" },

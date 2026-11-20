@@ -29,8 +29,7 @@ const navItems = computed(() => {
         { key: "help", label: "我要帮助", to: "/help" },
     ];
     if (auth.can("sysadmin")) {
-        items.push({ key: "sysadmin", label: "系统管理", to: "/admin/users" });
-        items.push({ key: "sysadmin", label: "任务类型", to: "/admin/task-types" });
+        items.push({ key: "sysadmin", label: "系统管理", to: "/admin" });
     }
     return items.filter((item) => auth.can(item.key));
 });

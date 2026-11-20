@@ -191,9 +191,9 @@ onMounted(() => {
     <section class="mx-auto max-w-[1180px]">
         <header class="flex flex-wrap items-end justify-between gap-3">
             <div>
-                <h1 class="font-display text-[26px] leading-tight tracking-tight text-ink">任务类型</h1>
+                <h1 class="font-display text-[26px] leading-tight tracking-tight text-ink">智能体管理</h1>
                 <p class="mt-1 text-[11.5px] text-ink-faint">
-                    维护任务类型、归档阶段/目录与默认技能；日常任务与项目任务都从这里下发。
+                    维护任务类型、归档阶段/目录与默认智能体；日常任务与项目任务都从这里下发。
                 </p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
