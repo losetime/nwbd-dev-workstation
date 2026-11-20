@@ -1,0 +1,141 @@
+name: nwbd-dev-workstation
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: nwbd-ws-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dev_workstation}
+      POSTGRES_USER: ${POSTGRES_USER:-dev_workstation}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请先在 deploy/.env 配置数据库口令}
+      TZ: Asia/Shanghai
+    volumes:
+      - ./data/pg:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - nwbd-dev-workstation-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      args:
+        GO_PROXY: ${GO_PROXY:-https://goproxy.cn,direct}
+    image: nwbd-dev-workstation-api:latest
+    container_name: nwbd-ws-api
+    restart: unless-stopped
+    environment:
+      NWBD_WS_ENVIRONMENT: ${NWBD_WS_ENVIRONMENT:-local}
+      NWBD_WS_LOG_LEVEL: ${NWBD_WS_LOG_LEVEL:-INFO}
+      NWBD_WS_DATABASE_URL: postgresql://${POSTGRES_USER:-dev_workstation}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-dev_workstation}
+      NWBD_WS_DINGTALK_CLIENT_ID: ${DD_CLIENT_ID:-}
+      NWBD_WS_DINGTALK_CLIENT_SECRET: ${DD_CLIENT_SECRET:-}
+      NWBD_WS_DINGTALK_CORP_ID: ${DD_CORP_ID:-}
+      NWBD_WS_APPROVAL_CLIENT_ID: ${APPROVAL_CLIENT_ID:-}
+      NWBD_WS_APPROVAL_CLIENT_SECRET: ${APPROVAL_CLIENT_SECRET:-}
+      NWBD_WS_APPROVAL_AGENT_ID: ${APPROVAL_AGENT_ID:-0}
+      NWBD_WS_APPROVAL_PROCESS_CODE: ${APPROVAL_PROCESS_CODE:-PROC-2E309DC0-76E4-47D4-94C4-F0A2780B4100}
+      NWBD_WS_CONTRACT_PROCESS_CODE: ${CONTRACT_PROCESS_CODE:-PROC-ACB82876-19CB-4B99-8FF1-8CAB8EB0223F}
+      NWBD_WS_CHANGE_PROCESS_CODE: ${CHANGE_PROCESS_CODE:-PROC-CA89833F-7725-4098-811D-9F52F3FDBA4D}
+      NWBD_WS_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8090}
+      NWBD_WS_LOGIN_REDIRECT: ${LOGIN_REDIRECT:-}
+      NWBD_WS_DEV_LOGIN_USERID: ${DEV_LOGIN_USERID:-}
+      NWBD_WS_DEV_LOGIN_NAME: ${DEV_LOGIN_NAME:-本地开发账号}
+      NWBD_WS_TOKEN_TTL_DAYS: ${TOKEN_TTL_DAYS:-30}
+      NWBD_WS_ROLE_SYNC_MINUTES: ${ROLE_SYNC_MINUTES:-10}
+      NWBD_WS_DIRECTORY_SYNC_MINUTES: ${DIRECTORY_SYNC_MINUTES:-30}
+      # 任务产出统一归档到文件管理（容器名直连，走 nwbd-link-files-dev 网络）
+      NWBD_WS_FILE_MANAGE_BASE: ${FILE_MANAGE_BASE:-http://nwbd-fm-api:8000}
+      NWBD_WS_FILE_MANAGE_TOKEN: ${FILE_MANAGE_TOKEN:-}
+      NWBD_WS_MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-100}
+      NWBD_WS_SKILLS_BASE: ${SKILLS_BASE:-http://8.160.178.247:18138}
+      # 本地测试用：允许在页头切换成任意在职人员（仅 local 生效）
+      NWBD_WS_DEV_ACT_AS: ${DEV_ACT_AS:-false}
+      NWBD_WS_CORS_ORIGINS: ${NWBD_WS_CORS_ORIGINS:-http://127.0.0.1:5175,http://localhost:5175}
+    ports:
+      - "127.0.0.1:8092:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - nwbd-dev-workstation-net
+      - nwbd-link-files-dev
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  consumer:
+    image: nwbd-dev-workstation-api:latest
+    container_name: nwbd-ws-consumer
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/consumer"]
+    healthcheck:
+      disable: true
+    environment:
+      NWBD_WS_ENVIRONMENT: ${NWBD_WS_ENVIRONMENT:-local}
+      NWBD_WS_LOG_LEVEL: ${NWBD_WS_LOG_LEVEL:-INFO}
+      NWBD_WS_DATABASE_URL: postgresql://${POSTGRES_USER:-dev_workstation}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-dev_workstation}
+      NWBD_WS_APPROVAL_CLIENT_ID: ${APPROVAL_CLIENT_ID:-}
+      NWBD_WS_APPROVAL_CLIENT_SECRET: ${APPROVAL_CLIENT_SECRET:-}
+      NWBD_WS_APPROVAL_AGENT_ID: ${APPROVAL_AGENT_ID:-0}
+      NWBD_WS_APPROVAL_PROCESS_CODE: ${APPROVAL_PROCESS_CODE:-PROC-2E309DC0-76E4-47D4-94C4-F0A2780B4100}
+      NWBD_WS_CONTRACT_PROCESS_CODE: ${CONTRACT_PROCESS_CODE:-PROC-ACB82876-19CB-4B99-8FF1-8CAB8EB0223F}
+      NWBD_WS_CHANGE_PROCESS_CODE: ${CHANGE_PROCESS_CODE:-PROC-CA89833F-7725-4098-811D-9F52F3FDBA4D}
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
+    networks:
+      - nwbd-dev-workstation-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    image: nwbd-dev-workstation-web:latest
+    container_name: nwbd-ws-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:8090:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - nwbd-dev-workstation-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  nwbd-dev-workstation-net:
+    name: nwbd-dev-workstation-net
+  # 点对点网络：只放研发系统 API 与文件管理 API，调用 /internal 走它
+  nwbd-link-files-dev:
+    name: nwbd-link-files-dev
+    external: true
+
