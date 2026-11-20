@@ -3,7 +3,9 @@
 import { computed, onMounted, ref } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 
-import { actAs, getAuthConfig, listDevPeople, type DevPerson } from "@/@api/dev";import { useAuth } from "@/store/auth";
+import { actAs, getAuthConfig, listDevPeople, type DevPerson } from "@/@api/dev";
+import ToastStack from "@/components/ui/ToastStack.vue";
+import { useAuth } from "@/store/auth";
 
 const auth = useAuth();
 const route = useRoute();
@@ -28,6 +30,7 @@ const navItems = computed(() => {
     ];
     if (auth.can("sysadmin")) {
         items.push({ key: "sysadmin", label: "系统管理", to: "/admin/users" });
+        items.push({ key: "sysadmin", label: "任务类型", to: "/admin/task-types" });
     }
     return items.filter((item) => auth.can(item.key));
 });
@@ -189,5 +192,7 @@ async function onSwitchRole(event: Event): Promise<void> {
         </div>
 
         <div v-if="menuOpen" class="fixed inset-0 z-10" @click="menuOpen = false"></div>
+
+        <ToastStack />
     </div>
 </template>

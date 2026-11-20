@@ -47,6 +47,15 @@ watch(
     { immediate: true },
 );
 
+// 项目列表可能比弹窗晚到：到了之后默认选中第一个
+watch(
+    () => props.projectOptions,
+    (list) => {
+        if (props.projectId || selectedId.value || !list?.length) return;
+        selectedId.value = list[0].id;
+    },
+);
+
 watch(selectedId, (id) => {
     if (id) prefill(id);
 });

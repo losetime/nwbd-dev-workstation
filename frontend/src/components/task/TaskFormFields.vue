@@ -14,8 +14,10 @@ const props = withDefaults(
         stages: string[];
         members: MemberOption[];
         skills: SkillItem[];
-        /** 任务类型字典（33 项项目任务）。 */
+        /** 任务类型字典（日常 + 项目任务）。 */
         taskTypes?: TaskTypeOption[];
+        /** 编辑任务时，任务类型带的技能名（锁定，不可删）。 */
+        lockedSkills?: string[];
         /** 下发任务时负责人必填，显示红星。 */
         ownerRequired?: boolean;
         /** 是否显示「任务类型」（仅新建任务时显示）。 */
@@ -29,6 +31,7 @@ const props = withDefaults(
     }>(),
     {
         taskTypes: () => [],
+        lockedSkills: () => [],
         ownerRequired: false,
         showTaskType: false,
         contracts: () => [],
@@ -54,16 +57,33 @@ const groups = computed(() => {
 const selected = computed(() => props.taskTypes.find((t) => t.code === props.model.task_type_code) || null);
 const isProjectPlan = computed(() => selected.value?.name === "项目策划" || props.model.task_type_code === PROJECT_PLAN_CODE);
 
-// 选「项目策划」时任务名称同步为「项目策划」；换走且名称没被改过则清空
+/** 类型带的技能锁定；编辑时由外部传入的也锁定。 */
+const lockedNames = computed(() => {
+    const names = new Set(props.lockedSkills);
+    if (props.showTaskType && selected.value) {
+        for (const s of selected.value.skills) names.add(s.name);
+    }
+    return [...names];
+});
+
+// 选「项目策划」时任务名称同步；切换类型时把默认技能带出来（类型带的锁死）
 watch(
     () => props.model.task_type_code,
     (next, prev) => {
         if (next === PROJECT_PLAN_CODE) {
             props.model.name = "项目策划";
-            return;
-        }
-        if (prev === PROJECT_PLAN_CODE && props.model.name === "项目策划") {
+        } else if (prev === PROJECT_PLAN_CODE && props.model.name === "项目策划") {
             props.model.name = "";
+        }
+        if (props.showTaskType && next) {
+            const type = props.taskTypes.find((t) => t.code === next);
+            if (type) {
+                props.model.skills = type.skills.map((s) => ({
+                    name: s.name,
+                    version: s.version,
+                    source: "type" as const,
+                }));
+            }
         }
     },
 );
@@ -80,7 +100,7 @@ watch(
                 </optgroup>
             </select>
             <span v-if="selected" class="text-[10.5px] text-ink-faint">
-                {{ selected.archive_stage }} · 产出归档到「{{ selected.archive_folder }}」<template v-if="selected.archive_note">（{{ selected.archive_note }}）</template>
+                {{ selected.archive_stage }} · 产出归档到{{ selected.archive_target === "public" ? "公共空间" : "" }}「{{ selected.archive_folder }}」<template v-if="selected.archive_note">（{{ selected.archive_note }}）</template>
             </span>
         </label>
         <template v-if="isProjectPlan">
@@ -161,7 +181,7 @@ watch(
         </label>
         <div class="flex flex-col gap-1 sm:col-span-2">
             <span class="label !mb-0">绑定技能</span>
-            <SkillMultiSelect v-model="model.skills" :options="skills" placeholder="不绑定（可多选）" />
+            <SkillMultiSelect v-model="model.skills" :options="skills" :locked="lockedNames" placeholder="不绑定（可多选）" />
         </div>
     </div>
 </template>

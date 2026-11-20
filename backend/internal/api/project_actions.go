@@ -487,13 +487,30 @@ func (a *API) createTask(w http.ResponseWriter, r *http.Request) {
 		approvalStatus = "审批中"
 	}
 
+	// 类型带的技能锁定（source=type），本次自选的作为 manual
+	skills := taskSkillsOf(payload.Skills, payload.SkillName, payload.SkillVersion)
+	merged := make([]store.TaskSkill, 0, len(skills)+len(taskType.Skills))
+	taken := map[string]bool{}
+	for _, ts := range taskType.Skills {
+		merged = append(merged, store.TaskSkill{Name: ts.Name, Version: ts.Version, Source: "type"})
+		taken[ts.Name] = true
+	}
+	for _, sk := range skills {
+		if taken[sk.Name] {
+			continue
+		}
+		sk.Source = "manual"
+		merged = append(merged, sk)
+	}
+
 	id, err := a.store.CreateTask(r.Context(), projectID, store.TaskInput{
 		Name: payload.Name, Description: payload.Description, Acceptance: payload.Acceptance,
 		Priority: payload.Priority, Tags: payload.Tags,
-		Skills: taskSkillsOf(payload.Skills, payload.SkillName, payload.SkillVersion),
+		Skills: merged,
 		Stage:  payload.Stage, OwnerID: payload.OwnerID, JobType: owner.JobType,
 		PlanStart: start, PlanDue: due, EstimateHours: hours, CreatedBy: user.ID,
 		TaskType: taskType.Name, TaskTypeCode: taskType.Code, ArchiveFolder: taskType.ArchiveFolder,
+		ArchiveTarget:      taskType.ArchiveTarget,
 		ApprovalInstanceID: instanceID, ApprovalStatus: approvalStatus,
 	})
 	if err != nil {

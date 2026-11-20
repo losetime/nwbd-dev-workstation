@@ -27,6 +27,10 @@ type Issue struct {
 	Handling     string
 	RiskID       string
 	ReportedOn   *time.Time
+	// HandledBy/HandledAt 归档人、归档时间
+	HandledBy     string
+	HandledByName string
+	HandledAt     *time.Time
 }
 
 // IssueInput 上报困难。
@@ -48,6 +52,12 @@ type IssueFilter struct {
 	ReporterJobType string
 	// ExcludeReporterJobTypes 非空：排除这些岗位上报的（项目经理待处理里排除其他项目经理/部门经理上报的）
 	ExcludeReporterJobTypes []string
+	// HandledID 非空：只看该人处理过（归档）的，不限项目
+	HandledID string
+	// ProjectViewerID 非空：只看该人当前参与中项目里的
+	ProjectViewerID string
+	// ArchivedOnly 为 true：只看已归档
+	ArchivedOnly bool
 	// All 为 true 时不按人过滤（部门经理）
 	All bool
 }
@@ -55,13 +65,15 @@ type IssueFilter struct {
 const issueColumns = `
 	i.id, i.code, i.project_id, p.name, COALESCE(i.task_id, ''), COALESCE(t.name, ''),
 	i.title, COALESCE(i.description, ''), i.reporter_id, u.name, COALESCE(i.job_type, ''),
-	i.severity, i.status, COALESCE(i.handling, ''), COALESCE(i.risk_id, ''), i.reported_on`
+	i.severity, i.status, COALESCE(i.handling, ''), COALESCE(i.risk_id, ''), i.reported_on,
+	COALESCE(i.handled_by, ''), COALESCE(hu.name, ''), i.handled_at`
 
 func scanIssue(row pgx.Row) (Issue, error) {
 	var it Issue
 	err := row.Scan(&it.ID, &it.Code, &it.ProjectID, &it.ProjectName, &it.TaskID, &it.TaskName,
 		&it.Title, &it.Description, &it.ReporterID, &it.ReporterName, &it.JobType,
-		&it.Severity, &it.Status, &it.Handling, &it.RiskID, &it.ReportedOn)
+		&it.Severity, &it.Status, &it.Handling, &it.RiskID, &it.ReportedOn,
+		&it.HandledBy, &it.HandledByName, &it.HandledAt)
 	return it, err
 }
 
@@ -101,9 +113,21 @@ func (s *Store) ListIssues(ctx context.Context, f IssueFilter) ([]Issue, error) 
 		JOIN project p ON p.id = i.project_id
 		LEFT JOIN task t ON t.id = i.task_id
 		JOIN app_user u ON u.id = i.reporter_id
+		LEFT JOIN app_user hu ON hu.id = i.handled_by
 		WHERE 1 = 1`
 	args := []any{}
-	if !f.All {
+	switch {
+	case f.HandledID != "":
+		args = append(args, f.HandledID)
+		sql += " AND i.handled_by = $" + itoa(len(args))
+	case f.ArchivedOnly && f.ProjectViewerID != "":
+		// 已归档：只限当前参与中的项目，不管谁上报、谁处理
+		args = append(args, f.ProjectViewerID)
+		sql += ` AND EXISTS (
+			SELECT 1 FROM project_member m
+			WHERE m.project_id = i.project_id AND m.user_id = $` + itoa(len(args)) + `
+			  AND m.status = '参与中')`
+	case !f.All:
 		if f.ReporterID != "" {
 			args = append(args, f.ReporterID)
 			sql += " AND i.reporter_id = $1"
@@ -117,6 +141,9 @@ func (s *Store) ListIssues(ctx context.Context, f IssueFilter) ([]Issue, error) 
 			sql += " AND false"
 		}
 	}
+	if f.ArchivedOnly {
+		sql += " AND i.status = '已归档'"
+	}
 	if f.ReporterJobType != "" {
 		args = append(args, f.ReporterJobType)
 		sql += " AND i.job_type = $" + itoa(len(args))
@@ -125,7 +152,11 @@ func (s *Store) ListIssues(ctx context.Context, f IssueFilter) ([]Issue, error) 
 		args = append(args, f.ExcludeReporterJobTypes)
 		sql += " AND (i.job_type IS NULL OR i.job_type <> ALL($" + itoa(len(args)) + "))"
 	}
-	sql += ` ORDER BY (i.status = '待处理') DESC, i.reported_on DESC, i.created_at DESC`
+	if f.ArchivedOnly || f.HandledID != "" {
+		sql += ` ORDER BY i.handled_at DESC NULLS LAST, i.created_at DESC`
+	} else {
+		sql += ` ORDER BY (i.status = '待处理') DESC, i.reported_on DESC, i.created_at DESC`
+	}
 
 	rows, err := s.pool.Query(ctx, sql, args...)
 	if err != nil {
@@ -151,6 +182,7 @@ func (s *Store) GetIssue(ctx context.Context, id string) (*Issue, error) {
 		JOIN project p ON p.id = i.project_id
 		LEFT JOIN task t ON t.id = i.task_id
 		JOIN app_user u ON u.id = i.reporter_id
+		LEFT JOIN app_user hu ON hu.id = i.handled_by
 		WHERE i.id = $1`, id)
 	it, err := scanIssue(row)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -162,11 +194,13 @@ func (s *Store) GetIssue(ctx context.Context, id string) (*Issue, error) {
 	return &it, nil
 }
 
-// HandleIssue 处理困难：转风险或归档。
-func (s *Store) HandleIssue(ctx context.Context, id, status, handling, riskID string) error {
+// HandleIssue 处理困难：归档并记录处理人与时间。
+func (s *Store) HandleIssue(ctx context.Context, id, status, handling, riskID, handledBy string) error {
 	_, err := s.pool.Exec(ctx, `
 		UPDATE issue SET status = $2, handling = NULLIF($3, ''),
-			risk_id = COALESCE(NULLIF($4, ''), risk_id), updated_at = now()
-		WHERE id = $1`, id, status, handling, riskID)
+			risk_id = COALESCE(NULLIF($4, ''), risk_id),
+			handled_by = COALESCE(NULLIF($5, ''), handled_by),
+			handled_at = now(), updated_at = now()
+		WHERE id = $1`, id, status, handling, riskID, handledBy)
 	return err
 }

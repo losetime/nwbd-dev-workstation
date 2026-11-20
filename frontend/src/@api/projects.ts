@@ -65,6 +65,8 @@ export interface Task {
     status: string;
     estimate_hours: number;
     actual_hours: number;
+    subtask_total: number;
+    subtask_done: number;
     overdue: boolean;
     delay_days: number;
 }
@@ -290,8 +292,9 @@ export interface RiskStats {
 export function listAllRisks(filters: { status?: string; level?: string; keyword?: string } = {}): Promise<{
     items: RiskRow[];
     stats: RiskStats;
+    can_create: boolean;
 }> {
-    return request<{ items: RiskRow[]; stats: RiskStats }>(`/api/risks${query(filters)}`);
+    return request<{ items: RiskRow[]; stats: RiskStats; can_create: boolean }>(`/api/risks${query(filters)}`);
 }
 
 export interface Candidate {

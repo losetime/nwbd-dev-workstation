@@ -244,7 +244,23 @@ func (a *API) listChanges(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, changeView(&items[i]))
 	}
-	writeOK(w, map[string]any{"items": out, "stats": map[string]any{"total": len(items), "pending": pending}})
+
+	// 发起变更：部门经理，或至少有一个自己担任项目经理的项目
+	canCreate := isBoss(user)
+	if !canCreate {
+		if ids, err := a.store.ProjectIDsOfManager(r.Context(), user.ID); err != nil {
+			a.fail(w, "校验发起权限失败", err)
+			return
+		} else if len(ids) > 0 {
+			canCreate = true
+		}
+	}
+
+	writeOK(w, map[string]any{
+		"items":      out,
+		"stats":      map[string]any{"total": len(items), "pending": pending},
+		"can_create": canCreate,
+	})
 }
 
 // GET /api/changes/{id} 变更详情（含实时审批状态）。

@@ -282,6 +282,8 @@ type Task struct {
 	Status        string
 	EstimateHours float64
 	ActualHours   float64
+	SubtaskTotal  int
+	SubtaskDone   int
 }
 
 // ListTasks 返回项目的任务，逾期优先、计划完成日升序。
@@ -289,7 +291,9 @@ func (s *Store) ListTasks(ctx context.Context, projectID string) ([]Task, error)
 	rows, err := s.pool.Query(ctx, `
 		SELECT t.id, t.project_id, COALESCE(t.stage, ''), t.name, t.owner_id, u.name,
 		       COALESCE(t.job_type, ''), t.plan_start, t.plan_due, t.actual_done, t.status,
-		       t.estimate_hours, t.actual_hours
+		       t.estimate_hours, t.actual_hours,
+		       (SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id),
+		       (SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id AND s.done)
 		FROM task t JOIN app_user u ON u.id = t.owner_id
 		WHERE t.project_id = $1
 		ORDER BY (t.status IN ('未开始','进行中','已延期')) DESC, t.plan_due NULLS LAST, t.name`, projectID)
@@ -303,7 +307,7 @@ func (s *Store) ListTasks(ctx context.Context, projectID string) ([]Task, error)
 		var t Task
 		if err := rows.Scan(&t.ID, &t.ProjectID, &t.Stage, &t.Name, &t.OwnerID, &t.OwnerName,
 			&t.JobType, &t.PlanStart, &t.PlanDue, &t.ActualDone, &t.Status,
-			&t.EstimateHours, &t.ActualHours); err != nil {
+			&t.EstimateHours, &t.ActualHours, &t.SubtaskTotal, &t.SubtaskDone); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -316,13 +320,15 @@ func (s *Store) GetTask(ctx context.Context, id string) (*Task, error) {
 	row := s.pool.QueryRow(ctx, `
 		SELECT t.id, t.project_id, COALESCE(t.stage, ''), t.name, t.owner_id, u.name,
 		       COALESCE(t.job_type, ''), t.plan_start, t.plan_due, t.actual_done, t.status,
-		       t.estimate_hours, t.actual_hours
+		       t.estimate_hours, t.actual_hours,
+		       (SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id),
+		       (SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id AND s.done)
 		FROM task t JOIN app_user u ON u.id = t.owner_id
 		WHERE t.id = $1`, id)
 	var t Task
 	if err := row.Scan(&t.ID, &t.ProjectID, &t.Stage, &t.Name, &t.OwnerID, &t.OwnerName,
 		&t.JobType, &t.PlanStart, &t.PlanDue, &t.ActualDone, &t.Status,
-		&t.EstimateHours, &t.ActualHours); err != nil {
+		&t.EstimateHours, &t.ActualHours, &t.SubtaskTotal, &t.SubtaskDone); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -704,6 +710,7 @@ type TaskInput struct {
 	TaskType           string
 	TaskTypeCode       string
 	ArchiveFolder      string
+	ArchiveTarget      string
 	ApprovalInstanceID string
 	ApprovalStatus     string
 }
@@ -729,21 +736,25 @@ func (s *Store) CreateTask(ctx context.Context, projectID string, in TaskInput) 
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO task (id, project_id, stage, name, description, acceptance, priority, tags,
 			owner_id, job_type, plan_start, plan_due, status, estimate_hours, created_by,
-			task_type, task_type_code, archive_folder, approval_instance_id, approval_status)
+			task_type, task_type_code, archive_folder, archive_target, approval_instance_id, approval_status)
 		VALUES ($1, $2, NULLIF($3, ''), $4, NULLIF($5, ''), $6, $7, $8,
 			$9, NULLIF($10, ''), $11, $12, '未开始', $13, NULLIF($14, ''),
-			COALESCE(NULLIF($15, ''), '普通任务'), NULLIF($16, ''), NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''))`,
+			COALESCE(NULLIF($15, ''), '普通任务'), NULLIF($16, ''), NULLIF($17, ''), COALESCE(NULLIF($18, ''), 'project'), NULLIF($19, ''), NULLIF($20, ''))`,
 		id, projectID, in.Stage, in.Name, in.Description, in.Acceptance, in.Priority, in.Tags,
 		in.OwnerID, in.JobType, in.PlanStart, in.PlanDue,
-		in.EstimateHours, in.CreatedBy, in.TaskType, in.TaskTypeCode, in.ArchiveFolder,
+		in.EstimateHours, in.CreatedBy, in.TaskType, in.TaskTypeCode, in.ArchiveFolder, in.ArchiveTarget,
 		in.ApprovalInstanceID, in.ApprovalStatus); err != nil {
 		return "", err
 	}
 	for i, sk := range in.Skills {
+		source := sk.Source
+		if source == "" {
+			source = "manual"
+		}
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO task_skill (id, task_id, skill_name, skill_version, sort_order)
-			VALUES ($1, $2, $3, $4, $5)`,
-			NewID(), id, sk.Name, sk.Version, i); err != nil {
+			INSERT INTO task_skill (id, task_id, skill_name, skill_version, sort_order, source)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			NewID(), id, sk.Name, sk.Version, i, source); err != nil {
 			return "", err
 		}
 	}

@@ -64,6 +64,8 @@ func taskView(t *store.BoardTask) map[string]any {
 		"task_type":            t.TaskType,
 		"task_type_code":       t.TaskTypeCode,
 		"archive_folder":       t.ArchiveFolder,
+		"subtask_total":        t.SubtaskTotal,
+		"subtask_done":         t.SubtaskDone,
 		"approval_instance_id": t.ApprovalInstanceID,
 		"approval_status":      t.ApprovalStatus,
 	}
@@ -167,10 +169,16 @@ func (a *API) getMyTask(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, "读取产出失败", err)
 		return
 	}
+	subtasks, err := a.store.ListSubtasks(r.Context(), task.ID)
+	if err != nil {
+		a.fail(w, "读取子任务失败", err)
+		return
+	}
 	writeOK(w, map[string]any{
 		"task":         taskView(task),
 		"events":       events,
 		"artifacts":    artifactsView(artifacts),
+		"subtasks":     subtasks,
 		"can_edit":     a.canEditTask(user, task),
 		"can_operate":  task.OwnerID == user.ID,
 		"is_owner":     task.OwnerID == user.ID,

@@ -3,13 +3,14 @@
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 
+import { useToast } from "@/composables/useToast";
 import { useAuth } from "@/store/auth";
 
 const router = useRouter();
 const auth = useAuth();
 
 const copied = ref(false);
-const notice = ref("");
+const toast = useToast();
 
 const token = computed(() => auth.token.value);
 const user = computed(() => auth.user.value);
@@ -32,7 +33,7 @@ async function copy(): Promise<void> {
         copied.value = true;
         window.setTimeout(() => (copied.value = false), 2000);
     } catch {
-        notice.value = "浏览器不允许写剪贴板，请手动选中复制";
+        toast.error("浏览器不允许写剪贴板，请手动选中复制");
     }
 }
 
@@ -51,10 +52,6 @@ async function logout(): Promise<void> {
             </div>
             <button class="btn-quiet" type="button" @click="logout">退出登录</button>
         </header>
-
-        <p v-if="notice" class="mt-4 border border-accent/40 bg-accent-soft px-4 py-3 text-[13px] text-accent">
-            {{ notice }}
-        </p>
 
         <div class="mt-6 shell-card max-w-[620px]">
             <dl class="divide-y divide-line text-[12.5px]">

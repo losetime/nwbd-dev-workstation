@@ -12,6 +12,7 @@ const RiskList = () => import("@/views/risks/RiskList.vue");
 const HelpList = () => import("@/views/help/HelpList.vue");
 const ChangeList = () => import("@/views/changes/ChangeList.vue");
 const Users = () => import("@/views/admin/Users.vue");
+const TaskTypes = () => import("@/views/admin/TaskTypes.vue");
 const Account = () => import("@/views/account/Account.vue");
 const Login = () => import("@/views/login/Login.vue");
 
@@ -26,6 +27,7 @@ export const router = createRouter({
         { path: "/help", name: "help", component: HelpList, meta: { title: "我要帮助", perm: "help" } },
         { path: "/changes", name: "changes", component: ChangeList, meta: { title: "变更管理", perm: "mychange" } },
         { path: "/admin/users", name: "users", component: Users, meta: { title: "系统管理", perm: "sysadmin" } },
+        { path: "/admin/task-types", name: "task-types", component: TaskTypes, meta: { title: "任务类型", perm: "sysadmin" } },
         { path: "/account", name: "account", component: Account, meta: { title: "用户信息" } },
         { path: "/login", name: "login", component: Login, meta: { title: "登录", bare: true, public: true } },
         { path: "/:pathMatch(.*)*", redirect: "/" },

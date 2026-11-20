@@ -6,6 +6,8 @@ import { useRoute, useRouter } from "vue-router";
 import {
     artifactURL,
     completeMyTask,
+    createSubtask,
+    deleteSubtask,
     getMyTask,
     getTimesheet,
     listSkills,
@@ -15,9 +17,11 @@ import {
     taskTone,
     updateMyTask,
     updateMyTaskStatus,
+    updateSubtask,
     uploadArtifact,
     type BoardTask,
     type SkillItem,
+    type Subtask,
     type TaskArtifact,
     type TaskEvent,
     type TimesheetInfo,
@@ -26,18 +30,27 @@ import { getProject } from "@/@api/projects";
 import { getTaskApproval, type TaskApproval } from "@/@api/approvals";
 import TaskFormFields from "@/components/task/TaskFormFields.vue";
 import { acceptanceText, emptyTaskForm, parseAcceptance, type MemberOption, type TaskFormModel } from "@/components/task/types";
+import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
+import { useToast } from "@/composables/useToast";
 import { fmtDate, relativeTime } from "@/utils/project";
 
 const route = useRoute();
 const router = useRouter();
 
+const toast = useToast();
 const loading = ref(true);
 const error = ref("");
-const notice = ref("");
 const task = ref<BoardTask | null>(null);
 const events = ref<TaskEvent[]>([]);
 const artifacts = ref<TaskArtifact[]>([]);
+const subtasks = ref<Subtask[]>([]);
+const newSubtask = ref("");
+const subtaskBusy = ref(false);
+const completeWarnOpen = ref(false);
+const delayConfirmOpen = ref(false);
+const subtaskDeleteOpen = ref(false);
+const subtaskDeleteTarget = ref<Subtask | null>(null);
 const approval = ref<TaskApproval | null>(null);
 const canEdit = ref(false);
 const canOperate = ref(false);
@@ -61,10 +74,12 @@ const taskId = computed(() => String(route.params.id));
 const tsTotal = computed(() =>
     tsRows.value.reduce((sum, row) => sum + (Number(row.hours) || 0), 0),
 );
+const typeSkillNames = computed(
+    () => task.value?.skills.filter((s) => s.source === "type").map((s) => s.name) ?? [],
+);
+const subtaskDone = computed(() => subtasks.value.filter((s) => s.done).length);
+const subtaskPending = computed(() => subtasks.value.length - subtaskDone.value);
 const isRunning = computed(() => task.value?.status === "进行中");
-
-/** 产出时间线：只取上传产出的事件。 */
-const artifactEvents = computed(() => events.value.filter((e) => e.type === "artifact"));
 
 /** 时间显示成 11-20 14:30。 */
 function fmtTime(value?: string | null): string {
@@ -94,6 +109,7 @@ async function load(silent = false): Promise<void> {
         task.value = data.task;
         events.value = data.events;
         artifacts.value = data.artifacts;
+        subtasks.value = data.subtasks ?? [];
         canEdit.value = data.can_edit;
         canOperate.value = data.can_operate;
         isOwner.value = data.is_owner;
@@ -130,12 +146,12 @@ async function loadTimesheet(): Promise<void> {
 }
 
 async function changeStatus(status: string): Promise<void> {
-    notice.value = "";
     try {
         await updateMyTaskStatus(taskId.value, status);
+        toast.success(`状态已更新为「${status}」`);
         await load();
     } catch (err) {
-        notice.value = err instanceof Error ? err.message : "更新状态失败";
+        toast.error(err instanceof Error ? err.message : "更新状态失败");
     }
 }
 
@@ -143,15 +159,16 @@ async function changeStatus(status: string): Promise<void> {
 
 /** 开始执行：第一次开始、延期后继续、已完成后重新打开都走这里。 */
 async function startRun(): Promise<void> {
-    notice.value = "";
     try {
         const result = await startTask(taskId.value);
-        notice.value = result.reopen
-            ? `任务已重新打开，开始第 ${result.attempt} 次执行`
-            : `已开始第 ${result.attempt} 次执行`;
+        toast.success(
+            result.reopen
+                ? `任务已重新打开，开始第 ${result.attempt} 次执行`
+                : `已开始第 ${result.attempt} 次执行`,
+        );
         await load();
     } catch (err) {
-        notice.value = err instanceof Error ? err.message : "开始执行失败";
+        toast.error(err instanceof Error ? err.message : "开始执行失败");
     }
 }
 
@@ -161,13 +178,12 @@ async function onUploadArtifact(event: Event): Promise<void> {
     const file = input.files?.[0];
     if (!file) return;
     uploading.value = true;
-    notice.value = "";
     try {
-        await uploadArtifact(taskId.value, file);
-        notice.value = `产出已上传：${file.name}`;
+        const art = await uploadArtifact(taskId.value, file);
+        toast.success(`产出已上传：${art.name}（归档到 ${art.folder}）`);
         await load();
     } catch (err) {
-        notice.value = err instanceof Error ? err.message : "上传失败";
+        toast.error(err instanceof Error ? err.message : "上传失败");
     } finally {
         uploading.value = false;
         input.value = "";
@@ -184,22 +200,81 @@ async function confirmTimesheet(): Promise<void> {
         .map((row) => ({ date: row.date, hours: Number(row.hours) || 0 }))
         .filter((row) => row.hours > 0);
     if (!items.length) {
-        notice.value = "没有填写工时";
+        toast.info("没有填写工时");
         return;
     }
     saving.value = true;
     try {
         const result = await saveTimesheet(taskId.value, items);
-        notice.value = `已确认 ${result.total} 小时（${result.days} 天）`;
+        toast.success(`已确认 ${result.total} 小时（${result.days} 天）`);
         await load();
     } catch (err) {
-        notice.value = err instanceof Error ? err.message : "确认工时失败";
+        toast.error(err instanceof Error ? err.message : "确认工时失败");
     } finally {
         saving.value = false;
     }
 }
 
+async function addSubtask(): Promise<void> {
+    const title = newSubtask.value.trim();
+    if (!title || subtaskBusy.value) return;
+    subtaskBusy.value = true;
+    try {
+        const sub = await createSubtask(taskId.value, title);
+        subtasks.value = [...subtasks.value, sub];
+        newSubtask.value = "";
+    } catch (err) {
+        toast.error(err instanceof Error ? err.message : "添加子任务失败");
+    } finally {
+        subtaskBusy.value = false;
+    }
+}
+
+async function toggleSubtask(sub: Subtask): Promise<void> {
+    if (subtaskBusy.value) return;
+    subtaskBusy.value = true;
+    try {
+        const updated = await updateSubtask(taskId.value, sub.id, { done: !sub.done });
+        subtasks.value = subtasks.value.map((s) => (s.id === sub.id ? updated : s));
+    } catch (err) {
+        toast.error(err instanceof Error ? err.message : "更新子任务失败");
+    } finally {
+        subtaskBusy.value = false;
+    }
+}
+
+function askRemoveSubtask(sub: Subtask): void {
+    subtaskDeleteTarget.value = sub;
+    subtaskDeleteOpen.value = true;
+}
+
+async function removeSubtask(): Promise<void> {
+    const sub = subtaskDeleteTarget.value;
+    if (!sub || subtaskBusy.value) return;
+    subtaskBusy.value = true;
+    try {
+        await deleteSubtask(taskId.value, sub.id);
+        subtasks.value = subtasks.value.filter((s) => s.id !== sub.id);
+        toast.success("子任务已删除");
+    } catch (err) {
+        toast.error(err instanceof Error ? err.message : "删除子任务失败");
+    } finally {
+        subtaskBusy.value = false;
+        subtaskDeleteOpen.value = false;
+        subtaskDeleteTarget.value = null;
+    }
+}
+
 function openComplete(): void {
+    if (subtaskPending.value > 0) {
+        completeWarnOpen.value = true;
+        return;
+    }
+    openCompleteModal();
+}
+
+function openCompleteModal(): void {
+    completeWarnOpen.value = false;
     completeForm.value = { summary: "" };
     modal.value = "complete";
 }
@@ -214,7 +289,7 @@ async function submitComplete(): Promise<void> {
     try {
         await completeMyTask(taskId.value, completeForm.value.summary.trim(), []);
         modal.value = "";
-        notice.value = "结果已提交，任务完成";
+        toast.success("结果已提交，任务完成");
         await load();
     } catch (err) {
         modalError.value = err instanceof Error ? err.message : "提交失败";
@@ -283,7 +358,7 @@ async function submitEdit(): Promise<void> {
             estimate_hours: editForm.value.estimate_hours === "" ? undefined : Number(editForm.value.estimate_hours),
         });
         modal.value = "";
-        notice.value = "任务已更新";
+        toast.success("任务已更新");
         await load();
     } catch (err) {
         modalError.value = err instanceof Error ? err.message : "保存失败";
@@ -338,13 +413,19 @@ onUnmounted(() => {
                         type="button"
                         @click="startRun"
                     >
-                        {{ task.status === "已完成" || task.status === "已取消" ? "重新打开并开始" : "开始任务" }}
+                        {{
+                            task.status === "已完成" || task.status === "已取消"
+                                ? "重新打开并开始"
+                                : task.status === "已延期"
+                                  ? "继续执行"
+                                  : "开始任务"
+                        }}
                     </button>
                     <button
                         v-if="isOwner && (task.status === '进行中' || task.status === '未开始')"
                         class="btn-quiet !py-1.5 text-[12px]"
                         type="button"
-                        @click="changeStatus('已延期')"
+                        @click="delayConfirmOpen = true"
                     >
                         标记延期
                     </button>
@@ -352,12 +433,12 @@ onUnmounted(() => {
                         完成并提交结果
                     </button>
                     <button v-if="canEdit" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="openEdit">编辑</button>
+                    <button class="btn-quiet !py-1.5 text-[12px]" type="button" @click="modal = 'timeline'">执行时间线</button>
                     <RouterLink class="btn-ghost !py-1.5 text-[12px]" :to="`/projects/${task.project_id}`">看项目 →</RouterLink>
                 </div>
             </header>
 
-            <p v-if="notice" class="mt-3 border border-line bg-white px-4 py-2 text-[12px] text-ink-soft">{{ notice }}</p>
-
+    
             <div class="mt-4 grid gap-4 lg:grid-cols-[1.6fr_1fr]">
                 <div class="space-y-4">
                     <section class="shell-card px-5 py-4">
@@ -372,6 +453,57 @@ onUnmounted(() => {
                             <li v-for="item in task.acceptance" :key="item">{{ item }}</li>
                         </ul>
                         <p v-else class="mt-2 text-[12px] text-ink-faint">未设置验收标准</p>
+                    </section>
+
+                    <!-- 子任务：研发自己拆的执行步骤 -->
+                    <section class="shell-card px-5 py-4">
+                        <div class="flex items-center justify-between">
+                            <h3 class="font-display text-[15px] text-ink">子任务</h3>
+                            <span v-if="subtasks.length" class="text-[10.5px] text-ink-faint">
+                                {{ subtaskDone }} / {{ subtasks.length }}
+                            </span>
+                        </div>
+                        <ul v-if="subtasks.length" class="mt-2 divide-y divide-line">
+                            <li v-for="s in subtasks" :key="s.id" class="group flex items-center gap-2 py-1.5 text-[12.5px]">
+                                <input
+                                    class="h-3.5 w-3.5 shrink-0 accent-ink"
+                                    type="checkbox"
+                                    :checked="s.done"
+                                    :disabled="!isOwner || subtaskBusy"
+                                    @change="toggleSubtask(s)"
+                                />
+                                <span class="min-w-0 flex-1" :class="s.done ? 'text-ink-faint line-through' : 'text-ink-soft'">
+                                    {{ s.title }}
+                                </span>
+                                <span v-if="s.done && s.done_by_name" class="shrink-0 text-[10px] text-ink-faint">{{ s.done_by_name }}</span>
+                                <button
+                                    v-if="isOwner"
+                                    class="ml-2 mr-3 shrink-0 whitespace-nowrap text-[10.5px] text-ink-faint opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                                    type="button"
+                                    @click="askRemoveSubtask(s)"
+                                >
+                                    删除
+                                </button>
+                            </li>
+                        </ul>
+                        <p v-else class="mt-2 text-[12px] text-ink-faint">还没有子任务。可以把自己要做的步骤拆在这里。</p>
+
+                        <div v-if="isOwner" class="mt-2 flex gap-2 border-t border-line pt-2">
+                            <input
+                                v-model="newSubtask"
+                                class="field min-w-0 flex-1 !py-1 !text-[12px]"
+                                placeholder="加一条子任务，回车保存"
+                                @keyup.enter="addSubtask"
+                            />
+                            <button
+                                class="btn-quiet shrink-0 whitespace-nowrap !py-1 text-[11.5px]"
+                                type="button"
+                                :disabled="subtaskBusy"
+                                @click="addSubtask"
+                            >
+                                添加
+                            </button>
+                        </div>
                     </section>
 
                     <!-- 工时确认 -->
@@ -410,33 +542,7 @@ onUnmounted(() => {
                         </template>
                     </section>
 
-                    <!-- 产出移到右侧 -->
-                    <section class="shell-card px-5 py-4">
-                        <div class="flex items-center justify-between">
-                            <h3 class="font-display text-[15px] text-ink">执行时间线</h3>
-                            <span class="text-[10.5px] text-ink-faint">{{ events.length }} 条</span>
-                        </div>
-
-                        <div v-if="events.length" class="mt-3 space-y-4">
-                            <div v-for="g in eventGroups" :key="g.attempt" class="border-l border-line pl-4">
-                                <p class="mb-2 text-[10.5px] font-medium tracking-[0.08em] text-ink-faint uppercase">
-                                    {{ g.attempt > 0 ? `第 ${g.attempt} 次执行` : "任务建立" }}
-                                </p>
-                                <ul class="space-y-3">
-                                    <li v-for="e in g.items" :key="e.id" class="relative">
-                                        <span class="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-ink/40"></span>
-                                        <p class="whitespace-pre-wrap text-[12.5px] leading-6 text-ink-soft">{{ e.message }}</p>
-                                        <p class="mt-0.5 text-[10.5px] text-ink-faint">
-                                            {{ formatTime(e.at) }}<template v-if="e.actor"> · {{ e.actor }}</template>
-                                        </p>
-                                    </li>
-                                </ul>
-                            </div>
-                        </div>
-                        <p v-else class="mt-3 text-[12px] text-ink-faint">还没有记录</p>
-                    </section>
-
-                    <section v-if="task.result" class="shell-card px-5 py-4">
+                    <section v-if="task.result && task.status === '已完成'" class="shell-card px-5 py-4">
                         <div class="flex items-center justify-between">
                             <h3 class="font-display text-[15px] text-ink">执行结果</h3>
                             <span class="text-[10.5px] text-ink-faint">
@@ -592,22 +698,40 @@ onUnmounted(() => {
                             </li>
                         </ul>
                         <p v-else class="mt-2 text-[12px] text-ink-faint">还没有产出。执行过程中或完成后都可以上传。</p>
-
-                        <div v-if="artifactEvents.length" class="mt-3 border-t border-line pt-3">
-                            <p class="text-[10.5px] tracking-wide text-ink-faint">产出时间线</p>
-                            <ul class="mt-1.5 space-y-1.5">
-                                <li v-for="e in artifactEvents" :key="e.id" class="flex items-baseline gap-2 text-[11px]">
-                                    <span class="w-[74px] shrink-0 font-mono text-[10px] text-ink-faint">{{ fmtTime(e.at) }}</span>
-                                    <span class="min-w-0 flex-1 text-ink-soft">{{ e.message }}</span>
-                                    <span class="shrink-0 text-[10px] text-ink-faint">{{ e.actor }}</span>
-                                </li>
-                            </ul>
-                        </div>
                     </section>
 
                 </div>
             </div>
         </template>
+
+        <Modal :open="modal === 'timeline'" title="执行时间线" width="680px" @close="modal = ''">
+            <div class="flex items-center justify-between">
+                <p class="text-[10.5px] text-ink-faint">按下发与执行轮次分组</p>
+                <span class="text-[10.5px] text-ink-faint">{{ events.length }} 条</span>
+            </div>
+
+            <div v-if="events.length" class="mt-3 max-h-[420px] space-y-4 overflow-y-auto pr-1">
+                <div v-for="g in eventGroups" :key="g.attempt" class="border-l border-line pl-4">
+                    <p class="mb-2 text-[10.5px] font-medium tracking-[0.08em] text-ink-faint uppercase">
+                        {{ g.attempt > 0 ? `第 ${g.attempt} 次执行` : "任务建立" }}
+                    </p>
+                    <ul class="space-y-3">
+                        <li v-for="e in g.items" :key="e.id" class="relative">
+                            <span class="absolute -left-[21px] top-1.5 h-2 w-2 rounded-full bg-ink/40"></span>
+                            <p class="whitespace-pre-wrap text-[12.5px] leading-6 text-ink-soft">{{ e.message }}</p>
+                            <p class="mt-0.5 text-[10.5px] text-ink-faint">
+                                {{ formatTime(e.at) }}<template v-if="e.actor"> · {{ e.actor }}</template>
+                            </p>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+            <p v-else class="mt-3 text-[12px] text-ink-faint">还没有记录</p>
+
+            <template #footer>
+                <button class="btn-quiet" type="button" @click="modal = ''">关闭</button>
+            </template>
+        </Modal>
 
         <Modal :open="modal === 'complete'" title="完成并提交结果" width="560px" @close="modal = ''">
             <label class="flex flex-col gap-1">
@@ -630,6 +754,7 @@ onUnmounted(() => {
                 :stages="projectStages"
                 :members="projectMembers"
                 :skills="skills"
+                :locked-skills="typeSkillNames"
             />
             <p class="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
                 改「负责人」即转派：新负责人接手开始/工时/产出，原负责人随之失去该任务的操作入口。
@@ -641,6 +766,36 @@ onUnmounted(() => {
                 <button class="btn-solid" type="button" :disabled="saving" @click="submitEdit">{{ saving ? "保存中…" : "保存" }}</button>
             </template>
         </Modal>
+
+        <ConfirmDialog
+            :open="completeWarnOpen"
+            title="提示"
+            :message="`还有 ${subtaskPending} 项子任务未完成，仍要完成吗？`"
+            confirm-text="仍要完成"
+            tone="warn"
+            @confirm="openCompleteModal"
+            @cancel="completeWarnOpen = false"
+        />
+
+        <ConfirmDialog
+            :open="delayConfirmOpen"
+            title="标记延期"
+            message="标记延期后任务会暂停，随时可以点「继续执行」恢复；不会结束任务，也不影响已记录的内容。"
+            confirm-text="标记延期"
+            tone="warn"
+            @confirm="delayConfirmOpen = false; changeStatus('已延期')"
+            @cancel="delayConfirmOpen = false"
+        />
+
+        <ConfirmDialog
+            :open="subtaskDeleteOpen"
+            title="删除子任务"
+            :message="`确定删除「${subtaskDeleteTarget?.title || ''}」吗？删除后不可恢复。`"
+            confirm-text="删除"
+            tone="danger"
+            @confirm="removeSubtask"
+            @cancel="subtaskDeleteOpen = false"
+        />
     </section>
 </template>
 

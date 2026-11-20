@@ -28,11 +28,15 @@ import { listSkills, listTaskTypes, type SkillItem, type TaskTypeOption } from "
 import { listContractApprovals, type ContractApproval } from "@/@api/approvals";
 import { listProjectChanges, type ChangeRecord } from "@/@api/changes";
 import ChangeCreateModal from "@/components/change/ChangeCreateModal.vue";
+import ChangeDetailModal from "@/components/change/ChangeDetailModal.vue";
 import { ApiError } from "@/@api/http";
+import RiskFormFields from "@/components/risk/RiskFormFields.vue";
+import { emptyRiskForm, type RiskFormModel } from "@/components/risk/types";
 import TaskFormFields from "@/components/task/TaskFormFields.vue";
 import { PROJECT_PLAN_CODE, emptyTaskForm, parseAcceptance, type TaskFormModel } from "@/components/task/types";
 import ConfirmDialog from "@/components/ui/ConfirmDialog.vue";
 import Modal from "@/components/ui/Modal.vue";
+import { useToast } from "@/composables/useToast";
 import { useAuth } from "@/store/auth";
 import { PROJECT_STATUSES, RISK_FLAGS, TYPE_SHORT, fmtDate, fmtWan, riskTone, statusTone } from "@/utils/project";
 
@@ -40,11 +44,10 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuth();
 
+const toast = useToast();
 const loading = ref(true);
 const error = ref("");
 const detail = ref<ProjectDetail | null>(null);
-const notice = ref("");
-const noticeTone = ref<"info" | "warn">("info");
 
 const modal = ref("");
 const saving = ref(false);
@@ -89,7 +92,7 @@ async function run(action: () => Promise<unknown>, successText: string): Promise
     modalError.value = "";
     try {
         await action();
-        notice.value = successText;
+        toast.success(successText);
         closeModal();
         await load();
     } catch (err) {
@@ -392,17 +395,14 @@ async function confirmDeleteProject(): Promise<void> {
         await deleteProject(projectId.value);
         await router.push("/");
     } catch (err) {
-        noticeTone.value = "warn";
-        notice.value = err instanceof Error ? err.message : "删除项目失败";
+        toast.error(err instanceof Error ? err.message : "删除项目失败");
     }
 }
 
 async function toggleMemberStatus(userId: string, status: string): Promise<void> {
-    notice.value = "";
-    noticeTone.value = "info";
     try {
         await setMemberStatus(projectId.value, userId, status);
-        notice.value = status === "已退出" ? "成员已退出项目" : "成员已恢复参与";
+        toast.success(status === "已退出" ? "成员已退出项目" : "成员已恢复参与");
         await load();
     } catch (err) {
         if (err instanceof ApiError && err.code === "HAS_OPEN_TASKS") {
@@ -410,9 +410,8 @@ async function toggleMemberStatus(userId: string, status: string): Promise<void>
             confirmOpen.value = true;
             return;
         }
-        // 其他业务拦截用警告色提示，不是系统故障
-        noticeTone.value = "warn";
-        notice.value = err instanceof Error ? err.message : "更新成员失败";
+        // 其他业务拦截用提示条告知，不是系统故障
+        toast.error(err instanceof Error ? err.message : "更新成员失败");
     }
 }
 
@@ -437,37 +436,11 @@ const memberSummary = computed(() => {
     return { active: members.filter((m) => m.status === "参与中").length, total: members.length };
 });
 
-const RISK_TYPES = ["资源", "进度", "经费", "客户", "技术", "其他"];
-const RISK_LEVELS = ["高", "中", "低"];
-const RISK_STATUSES = ["监控中", "已发生", "已解决"];
-
-const riskForm = ref({
-    id: "",
-    title: "",
-    type: "其他",
-    level: "中",
-    impact: "",
-    action: "",
-    owner_id: "",
-    target_date: "",
-    status: "监控中",
-    resolved_date: "",
-});
+const riskForm = ref<RiskFormModel>(emptyRiskForm());
 const riskTarget = ref<Risk | null>(null);
 
 function openRiskCreate(): void {
-    riskForm.value = {
-        id: "",
-        title: "",
-        type: "其他",
-        level: "中",
-        impact: "",
-        action: "",
-        owner_id: "",
-        target_date: "",
-        status: "监控中",
-        resolved_date: "",
-    };
+    riskForm.value = emptyRiskForm();
     riskTarget.value = null;
     modal.value = "riskitem";
 }
@@ -475,6 +448,7 @@ function openRiskCreate(): void {
 function openRiskEdit(r: Risk): void {
     if (!canManage.value) return;
     riskForm.value = {
+        ...emptyRiskForm(),
         id: r.id,
         title: r.title,
         type: r.type,
@@ -493,7 +467,7 @@ function openRiskEdit(r: Risk): void {
 async function saveRisk(): Promise<void> {
     const f = riskForm.value;
     if (!f.title.trim()) {
-        modalError.value = "风险标题必填";
+        modalError.value = "标题必填";
         return;
     }
     if (f.status === "已解决" && !f.resolved_date) {
@@ -535,6 +509,13 @@ function riskOverdue(r: Risk): boolean {
 // ---------- 项目变更 ----------
 const changes = ref<ChangeRecord[]>([]);
 const changeOpen = ref(false);
+const changeDetailOpen = ref(false);
+const changeDetailItem = ref<ChangeRecord | null>(null);
+
+function openChangeDetail(c: ChangeRecord): void {
+    changeDetailItem.value = c;
+    changeDetailOpen.value = true;
+}
 
 function riskLevelTone(level: string): string {
     if (level === "高") return "border-accent/40 bg-accent-soft text-accent";
@@ -615,7 +596,6 @@ onMounted(load);
                     </button>
                     <button v-if="canManage" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="openPlan">填写节点计划</button>
                     <button v-if="canManage" class="btn-solid !py-1.5 text-[12px]" type="button" @click="openTask">+ 下发任务</button>
-                    <button v-if="canManage" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="changeOpen = true">发起变更</button>
                     <button v-if="isBoss" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="openMembers">+ 增加成员</button>
                     <button v-if="isBoss" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="openManagers">更换项目经理</button>
                     <button v-if="isBoss" class="btn-quiet !py-1.5 text-[12px]" type="button" @click="openRisk">标记风险</button>
@@ -624,14 +604,6 @@ onMounted(load);
                     </button>
                 </div>
             </header>
-
-            <p
-                v-if="notice"
-                class="mt-3 border px-4 py-2 text-[12px]"
-                :class="noticeTone === 'warn' ? 'border-amber-500/40 bg-amber-50 text-amber-800' : 'border-line bg-white text-ink-soft'"
-            >
-                {{ notice }}
-            </p>
 
             <!-- ① 阶段与里程碑 -->
             <section class="mt-4 shell-card">
@@ -709,7 +681,24 @@ onMounted(load);
                     </dl>
                 </div>
 
-                
+                <div class="shell-card">
+                    <header class="border-b border-line px-5 py-3">
+                        <h3 class="font-display text-[15px] text-ink">附件</h3>
+                    </header>
+                    <div class="divide-y divide-line text-[12.5px]">
+                        <div class="flex items-center gap-3 px-5 py-3">
+                            <span class="w-24 shrink-0 text-ink-faint">策划书</span>
+                            <span class="min-w-0 flex-1 truncate text-ink-faint">未上传</span>
+                        </div>
+                        <div class="flex items-center gap-3 px-5 py-3">
+                            <span class="w-24 shrink-0 text-ink-faint">经费预算表</span>
+                            <span class="min-w-0 flex-1 truncate text-ink-faint">未上传</span>
+                        </div>
+                    </div>
+                    <p class="px-5 py-2 text-[10.5px] leading-relaxed text-ink-faint">
+                        附件上传暂未接入；当前任务产出统一归档到文件管理。
+                    </p>
+                </div>
             </section>
 
             <!-- ③ 项目任务 -->
@@ -730,6 +719,7 @@ onMounted(load);
                                 <th class="px-4 py-2 font-medium">负责人</th>
                                 <th class="px-4 py-2 font-medium">计划</th>
                                 <th class="px-4 py-2 font-medium">状态</th>
+                                <th class="px-4 py-2 font-medium">子任务</th>
                                 <th class="px-4 py-2 font-medium">预估 / 实际</th>
                             </tr>
                         </thead>
@@ -747,6 +737,9 @@ onMounted(load);
                                     {{ fmtDate(t.plan_start) || "—" }} ~ {{ fmtDate(t.plan_due) || "—" }}
                                 </td>
                                 <td class="px-4 py-2" :class="t.overdue ? 'text-accent' : 'text-ink-soft'">{{ t.status }}</td>
+                                <td class="px-4 py-2 text-ink-soft">
+                                    {{ t.subtask_total ? `${t.subtask_done}/${t.subtask_total}` : "—" }}
+                                </td>
                                 <td class="px-4 py-2 text-ink-soft">{{ t.estimate_hours }} / {{ t.actual_hours }} h</td>
                             </tr>
                         </tbody>
@@ -846,7 +839,7 @@ onMounted(load);
                         v-for="c in changes"
                         :key="c.id"
                         class="cursor-pointer px-5 py-3 text-[12.5px] hover:bg-paper"
-                        @click="router.push('/changes')"
+                        @click="openChangeDetail(c)"
                     >
                         <div class="flex flex-wrap items-center gap-2">
                             <span class="font-mono text-[10.5px] text-ink-faint">{{ c.code }}</span>
@@ -1141,57 +1134,7 @@ onMounted(load);
         </Modal>
 
         <Modal :open="modal === 'riskitem'" :title="riskForm.id ? '编辑风险' : '登记风险'" width="620px" @close="closeModal">
-            <div class="grid gap-3 sm:grid-cols-2">
-                <label class="flex flex-col gap-1 sm:col-span-2">
-                    <span class="label !mb-0">风险标题 <b class="text-accent">*</b></span>
-                    <input v-model="riskForm.title" class="field" placeholder="如 第三方接口交付延期" />
-                </label>
-                <label class="flex flex-col gap-1">
-                    <span class="label !mb-0">类型</span>
-                    <select v-model="riskForm.type" class="field">
-                        <option v-for="t in RISK_TYPES" :key="t" :value="t">{{ t }}</option>
-                    </select>
-                </label>
-                <label class="flex flex-col gap-1">
-                    <span class="label !mb-0">等级</span>
-                    <select v-model="riskForm.level" class="field">
-                        <option v-for="l in RISK_LEVELS" :key="l" :value="l">{{ l }}</option>
-                    </select>
-                </label>
-                <label class="flex flex-col gap-1 sm:col-span-2">
-                    <span class="label !mb-0">影响描述</span>
-                    <textarea v-model="riskForm.impact" class="field h-16 resize-none" placeholder="会发生什么后果" />
-                </label>
-                <label class="flex flex-col gap-1 sm:col-span-2">
-                    <span class="label !mb-0">应对措施</span>
-                    <textarea v-model="riskForm.action" class="field h-16 resize-none" placeholder="打算怎么处理" />
-                </label>
-                <label class="flex flex-col gap-1">
-                    <span class="label !mb-0">责任人</span>
-                    <select v-model="riskForm.owner_id" class="field">
-                        <option value="">未指定</option>
-                        <option v-for="m in activeMembers" :key="m.user_id" :value="m.user_id">
-                            {{ m.name }} · {{ m.project_role }}
-                        </option>
-                    </select>
-                </label>
-                <label class="flex flex-col gap-1">
-                    <span class="label !mb-0">目标解决日</span>
-                    <input v-model="riskForm.target_date" class="field" type="date" />
-                </label>
-                <template v-if="riskForm.id">
-                    <label class="flex flex-col gap-1">
-                        <span class="label !mb-0">状态</span>
-                        <select v-model="riskForm.status" class="field">
-                            <option v-for="s in RISK_STATUSES" :key="s" :value="s">{{ s }}</option>
-                        </select>
-                    </label>
-                    <label v-if="riskForm.status === '已解决'" class="flex flex-col gap-1">
-                        <span class="label !mb-0">解决日期 <b class="text-accent">*</b></span>
-                        <input v-model="riskForm.resolved_date" class="field" type="date" />
-                    </label>
-                </template>
-            </div>
+            <RiskFormFields :model="riskForm" :members="activeMembers" :show-status="!!riskForm.id" />
             <p class="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
                 风险只做登记与跟踪，不删除；解决后保留记录。已解决的风险只有部门经理可以重开。
             </p>
@@ -1213,6 +1156,12 @@ onMounted(load);
             @created="load()"
         />
 
+        <ChangeDetailModal
+            :open="changeDetailOpen"
+            :change="changeDetailItem"
+            :show-project-link="false"
+            @close="changeDetailOpen = false"
+        />
 
         <ConfirmDialog
             :open="confirmOpen"

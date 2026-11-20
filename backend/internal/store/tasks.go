@@ -13,6 +13,8 @@ import (
 type TaskSkill struct {
 	Name    string `json:"name"`
 	Version *int   `json:"version"`
+	// Source: type = 任务类型带的（锁定，不可删）；manual = 任务里自己加的
+	Source string `json:"source,omitempty"`
 }
 
 // BoardTask 是「我的任务」看板的一条任务。
@@ -52,8 +54,12 @@ type BoardTask struct {
 	TaskType           string
 	TaskTypeCode       string
 	ArchiveFolder      string
+	ArchiveTarget      string
 	ApprovalInstanceID string
 	ApprovalStatus     string
+	// SubtaskTotal / SubtaskDone 子任务进度（0/0 表示没有子任务）
+	SubtaskTotal int
+	SubtaskDone  int
 }
 
 // TaskLink 是任务上的外部链接。
@@ -71,7 +77,10 @@ const boardTaskColumns = `t.id, t.project_id, p.name, COALESCE(t.stage, ''), t.n
 	(SELECT max(e.created_at) FROM task_event e WHERE e.task_id = t.id),
 	t.updated_at, t.created_at, COALESCE(t.created_by, ''), COALESCE(cu.name, ''),
 	COALESCE(t.task_type, '普通任务'), COALESCE(t.task_type_code, ''), COALESCE(t.archive_folder, ''),
-	COALESCE(t.approval_instance_id, ''), COALESCE(t.approval_status, '')`
+	COALESCE(t.archive_target, 'project'),
+	COALESCE(t.approval_instance_id, ''), COALESCE(t.approval_status, ''),
+	(SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id),
+	(SELECT count(*) FROM task_subtask s WHERE s.task_id = t.id AND s.done)`
 
 func scanBoardTask(row pgx.Row) (BoardTask, error) {
 	var t BoardTask
@@ -82,8 +91,8 @@ func scanBoardTask(row pgx.Row) (BoardTask, error) {
 		&t.Status, &t.EstimateHours, &t.ActualHours,
 		&t.ResultSummary, &t.Artifacts, &t.ResultAgent, &t.FinishedAt,
 		&t.SkillName, &t.SkillVersion, &t.AttemptCount, &t.LastEventAt, &t.UpdatedAt, &t.CreatedAt,
-		&t.CreatedBy, &t.CreatorName, &t.TaskType, &t.TaskTypeCode, &t.ArchiveFolder,
-		&t.ApprovalInstanceID, &t.ApprovalStatus)
+		&t.CreatedBy, &t.CreatorName, &t.TaskType, &t.TaskTypeCode, &t.ArchiveFolder, &t.ArchiveTarget,
+		&t.ApprovalInstanceID, &t.ApprovalStatus, &t.SubtaskTotal, &t.SubtaskDone)
 	if err != nil {
 		return t, err
 	}
@@ -211,7 +220,7 @@ func (s *Store) loadTaskSkills(ctx context.Context, items []BoardTask) error {
 		items[i].Skills = []TaskSkill{}
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT task_id, skill_name, skill_version FROM task_skill
+		SELECT task_id, skill_name, skill_version, source FROM task_skill
 		WHERE task_id = ANY($1)
 		ORDER BY sort_order, created_at`, ids)
 	if err != nil {
@@ -221,12 +230,15 @@ func (s *Store) loadTaskSkills(ctx context.Context, items []BoardTask) error {
 
 	byTask := map[string][]TaskSkill{}
 	for rows.Next() {
-		var taskID, name string
+		var taskID, name, source string
 		var version *int
-		if err := rows.Scan(&taskID, &name, &version); err != nil {
+		if err := rows.Scan(&taskID, &name, &version, &source); err != nil {
 			return err
 		}
-		byTask[taskID] = append(byTask[taskID], TaskSkill{Name: name, Version: version})
+		if source == "" {
+			source = "manual"
+		}
+		byTask[taskID] = append(byTask[taskID], TaskSkill{Name: name, Version: version, Source: source})
 	}
 	if err := rows.Err(); err != nil {
 		return err
@@ -412,13 +424,36 @@ func (s *Store) UpdateTaskContent(ctx context.Context, id string, in TaskEditInp
 		return err
 	}
 	if in.Skills != nil {
-		if _, err := tx.Exec(ctx, `DELETE FROM task_skill WHERE task_id = $1`, id); err != nil {
+		// 类型带的技能锁定，只替换任务里自己加的
+		typeNames := map[string]bool{}
+		rows, err := tx.Query(ctx,
+			`SELECT skill_name FROM task_skill WHERE task_id = $1 AND source = 'type'`, id)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				rows.Close()
+				return err
+			}
+			typeNames[name] = true
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+
+		if _, err := tx.Exec(ctx, `DELETE FROM task_skill WHERE task_id = $1 AND source <> 'type'`, id); err != nil {
 			return err
 		}
 		for i, sk := range *in.Skills {
+			if typeNames[sk.Name] {
+				continue
+			}
 			if _, err := tx.Exec(ctx, `
-				INSERT INTO task_skill (id, task_id, skill_name, skill_version, sort_order)
-				VALUES ($1, $2, $3, $4, $5)`,
+				INSERT INTO task_skill (id, task_id, skill_name, skill_version, sort_order, source)
+				VALUES ($1, $2, $3, $4, $5, 'manual')`,
 				NewID(), id, sk.Name, sk.Version, i); err != nil {
 				return err
 			}

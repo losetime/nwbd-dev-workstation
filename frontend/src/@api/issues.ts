@@ -19,6 +19,10 @@ export interface Issue {
     handling: string;
     risk_id: string;
     reported_on: string | null;
+    /** 归档人 / 归档时间（历史数据可能为空）。 */
+    handled_by: string;
+    handled_by_name: string;
+    handled_at: string | null;
 }
 
 export interface IssueStats {
@@ -28,9 +32,11 @@ export interface IssueStats {
     archived: number;
 }
 
-/** 困难列表：scope=mine 我上报的，scope=todo 待我处理。 */
-export function listIssues(scope: "mine" | "todo", status = ""): Promise<{ items: Issue[]; stats: IssueStats }> {
-    return request<{ items: Issue[]; stats: IssueStats }>(`/api/issues${query({ scope, status })}`);
+/** 困难列表：我上报的 / 待我处理 / 我处理过的 / 已归档。 */
+export type IssueScope = "mine" | "todo" | "handled" | "archived";
+
+export function listIssues(scope: IssueScope): Promise<{ items: Issue[]; stats: IssueStats }> {
+    return request<{ items: Issue[]; stats: IssueStats }>(`/api/issues${query({ scope })}`);
 }
 
 export interface IssuePayload {

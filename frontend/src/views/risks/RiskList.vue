@@ -3,8 +3,12 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { listAllRisks, type RiskRow, type RiskStats } from "@/@api/projects";
+import { listAllRisks, listProjects, type RiskRow, type RiskStats } from "@/@api/projects";
+import RiskCreateModal from "@/components/risk/RiskCreateModal.vue";
+import type { RiskProjectOption } from "@/components/risk/types";
+import Modal from "@/components/ui/Modal.vue";
 import StatCard from "@/components/ui/StatCard.vue";
+import { useToast } from "@/composables/useToast";
 import { fmtDate } from "@/utils/project";
 
 const router = useRouter();
@@ -18,6 +22,14 @@ const status = ref("未解决");
 const level = ref("");
 const keyword = ref("");
 
+const detail = ref<RiskRow | null>(null);
+
+/** 只有部门经理和项目经理能登记风险。 */
+const canCreate = ref(false);
+const createOpen = ref(false);
+const projectOptions = ref<RiskProjectOption[]>([]);
+const toast = useToast();
+
 async function load(): Promise<void> {
     loading.value = true;
     error.value = "";
@@ -29,6 +41,7 @@ async function load(): Promise<void> {
         });
         items.value = data.items;
         stats.value = data.stats;
+        canCreate.value = data.can_create;
     } catch (err) {
         error.value = err instanceof Error ? err.message : "加载失败";
     } finally {
@@ -36,8 +49,25 @@ async function load(): Promise<void> {
     }
 }
 
-function openRisk(r: RiskRow): void {
-    void router.push({ path: `/projects/${r.project_id}`, query: { focus: "risk" } });
+async function openCreate(): Promise<void> {
+    if (!canCreate.value) return;
+    createOpen.value = true;
+    if (projectOptions.value.length) return;
+    try {
+        const list = await listProjects({ scope: "managed" });
+        projectOptions.value = list.map((p) => ({ id: p.id, name: p.name }));
+    } catch (err) {
+        toast.error(err instanceof Error ? err.message : "读取项目失败");
+    }
+}
+
+function openDetail(r: RiskRow): void {
+    detail.value = r;
+}
+
+function openProject(): void {
+    if (!detail.value) return;
+    void router.push({ path: `/projects/${detail.value.project_id}`, query: { focus: "risk" } });
 }
 
 function levelTone(l: string): string {
@@ -56,7 +86,7 @@ onMounted(() => {
         <header class="flex flex-wrap items-end justify-between gap-3">
             <div>
                 <h1 class="font-display text-[26px] leading-tight tracking-tight text-ink">风险管理</h1>
-                <p class="mt-1 text-[11.5px] text-ink-faint">跨项目风险总览，点任意一行跳到对应项目的「⑤ 风险管理」处理。</p>
+                <p class="mt-1 text-[11.5px] text-ink-faint">跨项目风险总览，点任意一行查看详情。</p>
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 <select v-model="status" class="field !w-[120px] !py-1 !text-[12px]" @change="load">
@@ -80,6 +110,7 @@ onMounted(() => {
                     @keyup.enter="load"
                 />
                 <button class="btn-quiet !py-1 text-[12px]" type="button" @click="load">查询</button>
+                <button v-if="canCreate" class="btn-solid !py-1.5 text-[12px]" type="button" @click="openCreate">+ 登记风险</button>
             </div>
         </header>
 
@@ -103,7 +134,7 @@ onMounted(() => {
                     <thead class="border-b border-line bg-white text-left text-[10.5px] tracking-[0.06em] text-ink-faint uppercase">
                         <tr>
                             <th class="px-4 py-2 font-medium">项目</th>
-                            <th class="px-4 py-2 font-medium">风险</th>
+                            <th class="px-4 py-2 font-medium">标题</th>
                             <th class="px-4 py-2 font-medium">等级</th>
                             <th class="px-4 py-2 font-medium">类型</th>
                             <th class="px-4 py-2 font-medium">状态</th>
@@ -116,18 +147,13 @@ onMounted(() => {
                             v-for="r in items"
                             :key="r.id"
                             class="cursor-pointer bg-white transition-colors hover:bg-paper"
-                            @click="openRisk(r)"
+                            @click="openDetail(r)"
                         >
                             <td class="px-4 py-2 text-ink-soft">
                                 <span class="block text-[10.5px] text-ink-faint">{{ r.project_code }}</span>
                                 {{ r.project_name }}
                             </td>
-                            <td class="px-4 py-2 text-ink">
-                                <span class="mr-1.5 font-mono text-[10.5px] text-ink-faint">{{ r.code }}</span>
-                                {{ r.title }}
-                                <p v-if="r.description" class="mt-0.5 text-[11px] text-ink-soft">{{ r.description }}</p>
-                                <p v-if="r.action" class="mt-0.5 text-[10.5px] text-ink-faint">应对：{{ r.action }}</p>
-                            </td>
+                            <td class="px-4 py-2 text-ink">{{ r.title }}</td>
                             <td class="px-4 py-2">
                                 <span class="border px-1.5 py-0.5 text-[10.5px]" :class="levelTone(r.level)">{{ r.level }}</span>
                             </td>
@@ -148,7 +174,81 @@ onMounted(() => {
         </div>
 
         <p class="mt-2 text-[10.5px] leading-relaxed text-ink-faint">
-            登记与处理在项目详情「⑤ 风险管理」里；这里只做跨项目查看，点任意一行跳到对应项目。研发岗位为只读。
+            点任意一行查看详情；登记与后续处理在项目详情「⑤ 风险管理」或本页「+ 登记风险」。
         </p>
+
+        <!-- 风险详情 -->
+        <Modal :open="!!detail" title="风险详情" width="640px" @close="detail = null">
+            <template v-if="detail">
+                <p class="text-[11px] text-ink-faint">
+                    <span class="font-mono">{{ detail.code }}</span>
+                </p>
+                <h3 class="mt-1 font-display text-[16px] leading-snug text-ink">{{ detail.title }}</h3>
+
+                <dl class="mt-4 grid gap-x-6 gap-y-2.5 text-[12.5px] sm:grid-cols-2">
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">项目</dt>
+                        <dd class="min-w-0 text-right text-ink">{{ detail.project_name }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">等级</dt>
+                        <dd class="text-right">
+                            <span class="border px-1.5 py-0.5 text-[10.5px]" :class="levelTone(detail.level)">{{ detail.level }}</span>
+                        </dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">类型</dt>
+                        <dd class="text-right text-ink">{{ detail.type || "—" }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">状态</dt>
+                        <dd class="text-right text-ink">
+                            {{ detail.status }}
+                            <span v-if="detail.overdue" class="ml-1 text-[10.5px] text-accent">已超期</span>
+                        </dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">责任人</dt>
+                        <dd class="text-right text-ink">{{ detail.owner_name || "—" }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">登记日期</dt>
+                        <dd class="text-right text-ink">{{ fmtDate(detail.identified_on) || "—" }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">目标日期</dt>
+                        <dd class="text-right text-ink">{{ fmtDate(detail.target_date) || "—" }}</dd>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <dt class="shrink-0 text-ink-faint">解决日期</dt>
+                        <dd class="text-right text-ink">{{ fmtDate(detail.resolved_date) || "—" }}</dd>
+                    </div>
+                </dl>
+
+                <div class="mt-4 border-t border-line pt-3">
+                    <p class="text-[10.5px] tracking-wide text-ink-faint">影响</p>
+                    <p class="mt-1 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-soft">{{ detail.impact || "—" }}</p>
+                </div>
+                <div class="mt-3 border-t border-line pt-3">
+                    <p class="text-[10.5px] tracking-wide text-ink-faint">描述</p>
+                    <p class="mt-1 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-soft">{{ detail.description || "—" }}</p>
+                </div>
+                <div class="mt-3 border-t border-line pt-3">
+                    <p class="text-[10.5px] tracking-wide text-ink-faint">应对措施</p>
+                    <p class="mt-1 whitespace-pre-line text-[12.5px] leading-relaxed text-ink-soft">{{ detail.action || "—" }}</p>
+                </div>
+            </template>
+            <template #footer>
+                <button class="btn-quiet" type="button" @click="detail = null">关闭</button>
+                <button class="btn-ghost" type="button" @click="openProject">打开项目</button>
+            </template>
+        </Modal>
+
+        <RiskCreateModal
+            :open="createOpen"
+            :project-options="projectOptions"
+            @close="createOpen = false"
+            @created="load()"
+        />
     </section>
 </template>

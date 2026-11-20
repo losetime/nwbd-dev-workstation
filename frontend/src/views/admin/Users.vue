@@ -12,10 +12,11 @@ import {
     type Person,
 } from "@/@api/users";
 import Modal from "@/components/ui/Modal.vue";
+import { useToast } from "@/composables/useToast";
 
+const toast = useToast();
 const loading = ref(true);
 const error = ref("");
-const notice = ref("");
 const people = ref<Person[]>([]);
 const filters = ref({ keyword: "", job_type: "" });
 const syncing = ref(false);
@@ -45,13 +46,12 @@ async function load(): Promise<void> {
 
 async function doSync(): Promise<void> {
     syncing.value = true;
-    notice.value = "";
     try {
         const result = await syncPeople();
-        notice.value = `通讯录同步完成：${result.synced}/${result.total}`;
+        toast.success(`通讯录同步完成：${result.synced}/${result.total}`);
         await load();
     } catch (err) {
-        notice.value = err instanceof Error ? err.message : "同步失败";
+        toast.error(err instanceof Error ? err.message : "同步失败");
     } finally {
         syncing.value = false;
     }
@@ -160,7 +160,6 @@ onMounted(load);
             <button class="btn-quiet !py-1.5" type="button" @click="load">查询</button>
         </div>
 
-        <p v-if="notice" class="mt-3 border border-line bg-white px-4 py-2 text-[12px] text-ink-soft">{{ notice }}</p>
         <p v-if="error" class="mt-3 border border-accent/30 bg-accent-soft/60 px-4 py-2 text-[12.5px] text-accent">{{ error }}</p>
 
         <div class="mt-4 shell-card overflow-x-auto">

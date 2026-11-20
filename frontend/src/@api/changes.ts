@@ -62,11 +62,16 @@ export function listProjectChanges(projectId: string): Promise<ChangeRecord[]> {
     return request<{ items: ChangeRecord[] }>(`/api/projects/${projectId}/changes`).then((d) => d.items);
 }
 
+export interface ChangeListResult {
+    items: ChangeRecord[];
+    stats: { total: number; pending: number };
+    /** 当前用户能否发起变更（部门经理，或至少有一个自己担任项目经理的项目）。 */
+    can_create: boolean;
+}
+
 /** 跨项目变更列表。 */
-export function listChanges(status = ""): Promise<{ items: ChangeRecord[]; stats: { total: number; pending: number } }> {
-    return request<{ items: ChangeRecord[]; stats: { total: number; pending: number } }>(
-        `/api/changes${query({ status })}`,
-    );
+export function listChanges(status = ""): Promise<ChangeListResult> {
+    return request<ChangeListResult>(`/api/changes${query({ status })}`);
 }
 
 /** 变更详情（含审批轨迹）。 */

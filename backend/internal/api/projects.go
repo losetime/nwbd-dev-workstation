@@ -290,6 +290,8 @@ func taskViews(items []store.Task) []map[string]any {
 			"status":         t.Status,
 			"estimate_hours": t.EstimateHours,
 			"actual_hours":   t.ActualHours,
+			"subtask_total":  t.SubtaskTotal,
+			"subtask_done":   t.SubtaskDone,
 			"overdue":        metrics.IsTaskOverdue(t.Status, t.PlanDue, now),
 			"delay_days":     metrics.DelayDays(t.PlanDue, t.ActualDone),
 		})

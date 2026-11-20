@@ -14,6 +14,8 @@ export interface TaskResult {
 export interface TaskSkill {
     name: string;
     version: number | null;
+    /** type = 任务类型带的（锁定，不可删）；manual = 任务里自己加的 */
+    source?: "type" | "manual";
 }
 
 export interface BoardTask {
@@ -51,6 +53,9 @@ export interface BoardTask {
     task_type_code: string;
     /** 产出归档到文件管理的哪个一级目录（任务创建时的快照）。 */
     archive_folder: string;
+    /** 子任务进度（0/0 表示没有子任务）。 */
+    subtask_total: number;
+    subtask_done: number;
     approval_instance_id: string;
     approval_status: string;
 }
@@ -71,10 +76,26 @@ export interface TaskEvent {
     at: string;
 }
 
+/** 任务内部的 TODO（研发拆解的细项）。 */
+export interface Subtask {
+    id: string;
+    task_id: string;
+    title: string;
+    done: boolean;
+    sort_order: number;
+    created_by: string;
+    creator_name: string;
+    created_at: string;
+    done_by: string;
+    done_by_name: string;
+    done_at: string | null;
+}
+
 export interface TaskDetail {
     task: BoardTask;
     events: TaskEvent[];
     artifacts: TaskArtifact[];
+    subtasks: Subtask[];
     can_edit: boolean;
     can_operate: boolean;
     is_owner: boolean;
@@ -93,20 +114,67 @@ export interface TaskArtifact {
     created_at: string;
 }
 
-/** 任务类型字典项（来自《任务类型归档阶段对照表》的项目任务）。 */
+/** 任务类型字典项（来自《任务类型归档阶段对照表》）。 */
 export interface TaskTypeOption {
     code: string;
     name: string;
     group_name: string;
     archive_stage: string;
     archive_folder: string;
+    /** project = 落项目目录；public = 落公共空间「研发部」 */
+    archive_target: "project" | "public";
     archive_note: string;
+    description: string;
+    sort_order: number;
+    enabled: boolean;
+    updated_at: string;
+    skills: { name: string; version: number | null }[];
 }
 
-/** 任务类型下拉数据。 */
-export async function listTaskTypes(): Promise<TaskTypeOption[]> {
-    const data = await request<{ items: TaskTypeOption[]; total: number }>("/api/task-types");
+/** 任务类型下拉数据；all=true 仅供管理页（含停用）。 */
+export async function listTaskTypes(all = false): Promise<TaskTypeOption[]> {
+    const data = await request<{ items: TaskTypeOption[]; total: number }>(
+        `/api/task-types${all ? "?all=1" : ""}`,
+    );
     return data.items;
+}
+
+export interface TaskTypePayload {
+    name: string;
+    group_name: string;
+    description: string;
+    archive_stage: string;
+    archive_folder: string;
+    archive_target: "project" | "public";
+    archive_note: string;
+    sort_order: number;
+    skills: { name: string; version: number | null }[];
+}
+
+/** 新建任务类型（管理页）。 */
+export function createTaskType(payload: TaskTypePayload): Promise<TaskTypeOption> {
+    return request<TaskTypeOption>("/api/task-types", { method: "POST", body: JSON.stringify(payload) });
+}
+
+/** 编辑任务类型（编码不可改）。 */
+export function updateTaskType(code: string, payload: TaskTypePayload): Promise<TaskTypeOption> {
+    return request<TaskTypeOption>(`/api/task-types/${code}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+    });
+}
+
+/** 启用 / 停用任务类型。 */
+export function setTaskTypeStatus(code: string, enabled: boolean): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/task-types/${code}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+    });
+}
+
+/** 删除任务类型（有任务引用时后端会拒绝）。 */
+export function deleteTaskType(code: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/task-types/${code}`, { method: "DELETE" });
 }
 
 
@@ -185,6 +253,8 @@ export function completeMyTask(id: string, summary: string, artifacts: string[])
 export interface TaskSkill {
     name: string;
     version: number | null;
+    /** type = 任务类型带的（锁定，不可删）；manual = 任务里自己加的 */
+    source?: "type" | "manual";
 }
 
 export interface TaskEditPayload {
@@ -271,6 +341,27 @@ export async function uploadArtifact(id: string, file: File): Promise<TaskArtifa
 /** 产出下载地址。 */
 export function artifactURL(taskId: string, artifactId: string): string {
     return `/api/my/tasks/${taskId}/artifacts/${artifactId}`;
+}
+
+/** 新增子任务（仅任务负责人）。 */
+export function createSubtask(taskId: string, title: string): Promise<Subtask> {
+    return request<Subtask>(`/api/my/tasks/${taskId}/subtasks`, {
+        method: "POST",
+        body: JSON.stringify({ title }),
+    });
+}
+
+/** 更新子任务：改标题或勾选（仅任务负责人）。 */
+export function updateSubtask(taskId: string, id: string, payload: { title?: string; done?: boolean }): Promise<Subtask> {
+    return request<Subtask>(`/api/my/tasks/${taskId}/subtasks/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+    });
+}
+
+/** 删除子任务（仅任务负责人）。 */
+export function deleteSubtask(taskId: string, id: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/api/my/tasks/${taskId}/subtasks/${id}`, { method: "DELETE" });
 }
 
 /** 工时确认建议。 */

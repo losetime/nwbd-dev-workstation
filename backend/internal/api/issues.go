@@ -10,21 +10,24 @@ import (
 
 func issueView(it *store.Issue) map[string]any {
 	return map[string]any{
-		"id":            it.ID,
-		"code":          it.Code,
-		"project_id":    it.ProjectID,
-		"project_name":  it.ProjectName,
-		"task_id":       it.TaskID,
-		"task_name":     it.TaskName,
-		"title":         it.Title,
-		"description":   it.Description,
-		"reporter_id":   it.ReporterID,
-		"reporter_name": it.ReporterName,
-		"severity":      it.Severity,
-		"status":        it.Status,
-		"handling":      it.Handling,
-		"risk_id":       it.RiskID,
-		"reported_on":   it.ReportedOn,
+		"id":              it.ID,
+		"code":            it.Code,
+		"project_id":      it.ProjectID,
+		"project_name":    it.ProjectName,
+		"task_id":         it.TaskID,
+		"task_name":       it.TaskName,
+		"title":           it.Title,
+		"description":     it.Description,
+		"reporter_id":     it.ReporterID,
+		"reporter_name":   it.ReporterName,
+		"severity":        it.Severity,
+		"status":          it.Status,
+		"handling":        it.Handling,
+		"risk_id":         it.RiskID,
+		"reported_on":     it.ReportedOn,
+		"handled_by":      it.HandledBy,
+		"handled_by_name": it.HandledByName,
+		"handled_at":      it.HandledAt,
 	}
 }
 
@@ -46,6 +49,17 @@ func (a *API) listIssues(w http.ResponseWriter, r *http.Request) {
 			// 项目经理只处理研发/测试/UI 等一线成员上报的（同项目）
 			f.ManagerID = user.ID
 			f.ExcludeReporterJobTypes = []string{"项目经理", "部门经理"}
+		}
+	case "handled":
+		// 我处理过的：不限项目
+		f.HandledID = user.ID
+	case "archived":
+		// 已归档：只限当前参与中的项目（部门经理看全部）
+		f.ArchivedOnly = true
+		if isBoss(user) {
+			f.All = true
+		} else {
+			f.ProjectViewerID = user.ID
 		}
 	default: // mine
 		f.ReporterID = user.ID
@@ -201,7 +215,7 @@ func (a *API) archiveIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnprocessableEntity, "INVALID_REQUEST", "归档必须填写处理说明", nil)
 		return
 	}
-	if err := a.store.HandleIssue(r.Context(), issue.ID, "已归档", strings.TrimSpace(payload.Handling), ""); err != nil {
+	if err := a.store.HandleIssue(r.Context(), issue.ID, "已归档", strings.TrimSpace(payload.Handling), "", user.ID); err != nil {
 		a.fail(w, "归档失败", err)
 		return
 	}

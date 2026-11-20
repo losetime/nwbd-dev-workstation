@@ -162,7 +162,10 @@ onUnmounted(() => {
                     <span v-for="tag in t.tags.slice(0, 4)" :key="tag" class="border border-line bg-paper px-1.5 py-0.5 text-[10.5px] text-ink-soft">
                         #{{ tag }}
                     </span>
-                    <span v-if="t.result" class="border border-emerald-500/30 bg-emerald-50 px-1.5 py-0.5 text-[10.5px] text-emerald-700">
+                    <span
+                        v-if="t.result && t.status === '已完成'"
+                        class="border border-emerald-500/30 bg-emerald-50 px-1.5 py-0.5 text-[10.5px] text-emerald-700"
+                    >
                         已提交结果
                     </span>
                 </div>
@@ -170,6 +173,7 @@ onUnmounted(() => {
                 <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px] text-ink-soft">
                     <span>计划 {{ fmtDate(t.plan_due) || "—" }}</span>
                     <span>工时 {{ t.estimate_hours }} / {{ t.actual_hours }} h</span>
+                    <span v-if="t.subtask_total">子任务 {{ t.subtask_done }}/{{ t.subtask_total }}</span>
                     <span v-if="t.status === '进行中'" class="text-ink-faint">
                         最后活动 {{ relativeTime(t.last_event_at || t.updated_at) }}
                     </span>

@@ -74,12 +74,25 @@ func (a *API) listRisks(w http.ResponseWriter, r *http.Request) {
 		a.fail(w, "读取风险统计失败", err)
 		return
 	}
+
+	// 登记风险：部门经理，或至少有一个自己担任项目经理的项目
+	canCreate := isBoss(user)
+	if !canCreate {
+		if ids, err := a.store.ProjectIDsOfManager(r.Context(), user.ID); err != nil {
+			a.fail(w, "校验登记权限失败", err)
+			return
+		} else if len(ids) > 0 {
+			canCreate = true
+		}
+	}
+
 	writeOK(w, map[string]any{
 		"items": items,
 		"stats": map[string]any{
 			"total": st.Total, "open": st.Open, "high": st.High,
 			"overdue": st.Overdue, "resolved": st.Resolved,
 		},
+		"can_create": canCreate,
 	})
 }
 

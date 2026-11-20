@@ -114,12 +114,19 @@ func (a *API) startMyTask(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, map[string]any{"attempt": attempt, "reopen": reopen})
 }
 
-// GET /api/task-types 任务类型字典（分组下拉用）。
+// GET /api/task-types 任务类型字典（分组下拉用）；?all=1 供管理页含停用。
 func (a *API) listTaskTypes(w http.ResponseWriter, r *http.Request) {
 	if _, ok := a.requirePerm(w, r, "mytask"); !ok {
 		return
 	}
-	items, err := a.store.ListTaskTypes(r.Context())
+	includeDisabled := false
+	if r.URL.Query().Get("all") == "1" {
+		if _, ok := a.requirePerm(w, r, "sysadmin"); !ok {
+			return
+		}
+		includeDisabled = true
+	}
+	items, err := a.store.ListTaskTypes(r.Context(), includeDisabled)
 	if err != nil {
 		a.fail(w, "读取任务类型失败", err)
 		return
@@ -153,14 +160,23 @@ func (a *API) uploadTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	project, err := a.store.GetProject(r.Context(), task.ProjectID)
-	if err != nil || project == nil {
-		writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在", nil)
-		return
+	// 归档目标：项目目录（按合同实例）或公共空间（固定 space:public）
+	archiveTarget := strings.TrimSpace(task.ArchiveTarget)
+	if archiveTarget == "" {
+		archiveTarget = "project"
 	}
-	if strings.TrimSpace(project.ContractInstanceID) == "" {
-		writeError(w, http.StatusConflict, "CONTRACT_REQUIRED", "本项目未关联销售合同，不能归档产出", nil)
-		return
+	instanceID := "space:public"
+	if archiveTarget != "public" {
+		project, err := a.store.GetProject(r.Context(), task.ProjectID)
+		if err != nil || project == nil {
+			writeError(w, http.StatusNotFound, "NOT_FOUND", "项目不存在", nil)
+			return
+		}
+		if strings.TrimSpace(project.ContractInstanceID) == "" {
+			writeError(w, http.StatusConflict, "CONTRACT_REQUIRED", "本项目未关联销售合同，不能归档产出", nil)
+			return
+		}
+		instanceID = project.ContractInstanceID
 	}
 
 	folder := strings.TrimSpace(task.ArchiveFolder)
@@ -202,7 +218,7 @@ func (a *API) uploadTaskArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmProject, err := a.files.ProjectByInstance(r.Context(), project.ContractInstanceID)
+	fmProject, err := a.files.ProjectByInstance(r.Context(), instanceID)
 	if err != nil {
 		a.failArchive(w, "查询文件管理项目失败", err)
 		return
